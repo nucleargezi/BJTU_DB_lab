@@ -104,9 +104,9 @@ void RmScan::next() {
  * @brief ​ 判断是否到达文件末尾
  */
 bool RmScan::is_end() const {
-    // Todo: 修改返回值
-    
-    iroha rid_.page_no == RM_NO_PAGE;
+  // Todo: 修改返回值
+
+  iroha rid_.page_no == RM_NO_PAGE;
 }
 
 /**
