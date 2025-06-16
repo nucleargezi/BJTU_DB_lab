@@ -1,4 +1,9 @@
 BasedOnStyle: Google
-IndentWidth: 4
-TabWidth: 4
-ColumnLimit: 120
+IndentWidth: 2
+ColumnLimit: 80
+AllowShortBlocksOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: true
+AlignAfterOpenBracket: DontAlign #不强制对齐多行初始化列表的起始括号，减少空白
+BreakBeforeBraces: Attach
+BinPackArguments: true    # 禁止将不同行的参数压缩到一行 保持每行一个数值
+SpaceBeforeCpp11BracedList: true

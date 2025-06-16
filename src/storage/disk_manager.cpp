@@ -17,6 +17,46 @@ See the Mulan PSL v2 for more details. */
 
 #include "defs.h"
 
+#define meion auto
+#define iroha return
+#define OV4(a, b, c, d, e, ...) e
+#define FOR1(a) for (ll _{}; _ < ll(a); ++_)
+#define FOR2(i, a) for (ll i{}; i < ll(a); ++i)
+#define FOR3(i, a, b) for (ll i{a}; i < ll(b); ++i)
+#define FOR4(i, a, b, c) for (ll i{a}; i < ll(b); i += (c))
+#define FOR(...) OV4(__VA_ARGS__, FOR4, FOR3, FOR2, FOR1)(__VA_ARGS__)
+#define FOR1_R(a) for (ll i{(a) - 1}; i > -1ll; --i)
+#define FOR2_R(i, a) for (ll i{(a) - 1}; i > -1ll; --i)
+#define FOR3_R(i, a, b) for (ll i{(b) - 1}; i > ll(a - 1); --i)
+#define FOR4_R(i, a, b, c) for (ll i{(b) - 1}; i > (a - 1); i -= (c))
+#define FOR_R(...) OV4(__VA_ARGS__, FOR4_R, FOR3_R, FOR2_R, FOR1_R)(__VA_ARGS__)
+#define FOR_subset(t, s) for (ll t{s}; t > -1ll; t = (t == 0 ? -1 : (t - 1) & s))
+namespace yorisou {
+  using u8 = uint8_t;
+  using uint = unsigned int;
+  using ll = long long;
+  using ull = unsigned long long;
+  using ld = long double;
+  using i128 = __int128;
+  using u128 = __uint128_t;
+  using f128 = __float128;
+  template <typename T> constexpr T inf = 0;
+  template <>
+  constexpr int inf<int> = 2147483647;
+  template <>
+  constexpr uint inf<uint> = 4294967295U;
+  template <>
+  constexpr ll inf<ll> = 9223372036854775807LL;
+  template <>
+  constexpr ull inf<ull> = 18446744073709551615ULL;
+  template <>
+  constexpr i128 inf<i128> = i128(inf<ll>) * 2'000'000'000'000'000'000;
+  template <>
+  constexpr double inf<double> = inf<ll>;
+  template <>
+  constexpr long double inf<long double> = inf<ll>;
+}
+
 DiskManager::DiskManager() { memset(fd2pageno_, 0, MAX_FD * (sizeof(std::atomic<page_id_t>) / sizeof(char))); }
 
 /**
@@ -26,25 +66,21 @@ DiskManager::DiskManager() { memset(fd2pageno_, 0, MAX_FD * (sizeof(std::atomic<
  * @param {char} *offset 要写入磁盘的数据
  * @param {int} num_bytes 要写入磁盘的数据大小
  */
-void DiskManager::write_page(int fd, page_id_t page_no, const char *offset, int num_bytes) {
-    // Todo:
-    // 1.lseek()定位到文件头，通过(fd,page_no)可以定位指定页面及其在磁盘文件中的偏移量
-    // 2.调用write()函数
-    // 注意write返回值与num_bytes不等时 throw InternalError("DiskManager::write_page Error");
-    
-    // 计算页面在文件中的偏移量
-    off_t page_offset = page_no * PAGE_SIZE;
-    
-    // 定位到指定页面的开始位置
-    if (lseek(fd, page_offset, SEEK_SET) == -1) {
-        throw UnixError();
-    }
-    
-    // 写入数据
-    ssize_t bytes_written = write(fd, offset, num_bytes);
-    if (bytes_written != num_bytes) {
-        throw InternalError("DiskManager::write_page Error");
-    }
+void DiskManager::write_page(
+    int fd, page_id_t page_no, const char *offset, int num_bytes) {
+  // Todo:
+  // 1.lseek()定位到文件头，通过(fd,page_no)可以定位指定页面及其在磁盘文件中的偏移量
+  // 2.调用write()函数
+  // 注意write返回值与num_bytes不等时 throw
+  // InternalError("DiskManager::write_page Error");
+
+  off_t off = page_no * PAGE_SIZE;
+  if (lseek(fd, off, SEEK_SET) == -1) throw UnixError();
+  // 写入数据
+  ssize_t wt_sz = write(fd, offset, num_bytes);
+  if (wt_sz != num_bytes) {
+    throw InternalError("DiskManager::write_page Error");
+  }
 }
 
 /**
@@ -54,25 +90,21 @@ void DiskManager::write_page(int fd, page_id_t page_no, const char *offset, int 
  * @param {char} *offset 读取的内容写入到offset中
  * @param {int} num_bytes 读取的数据量大小
  */
-void DiskManager::read_page(int fd, page_id_t page_no, char *offset, int num_bytes) {
-    // Todo:
-    // 1.lseek()定位到文件头，通过(fd,page_no)可以定位指定页面及其在磁盘文件中的偏移量
-    // 2.调用read()函数
-    // 注意read返回值与num_bytes不等时，throw InternalError("DiskManager::read_page Error");
-    
-    // 计算页面在文件中的偏移量
-    off_t page_offset = page_no * PAGE_SIZE;
-    
-    // 定位到指定页面的开始位置
-    if (lseek(fd, page_offset, SEEK_SET) == -1) {
-        throw UnixError();
-    }
-    
-    // 读取数据
-    ssize_t bytes_read = read(fd, offset, num_bytes);
-    if (bytes_read != num_bytes) {
-        throw InternalError("DiskManager::read_page Error");
-    }
+void DiskManager::read_page(
+    int fd, page_id_t page_no, char *offset, int num_bytes) {
+  // Todo:
+  // 1.lseek()定位到文件头，通过(fd,page_no)可以定位指定页面及其在磁盘文件中的偏移量
+  // 2.调用read()函数
+  // 注意read返回值与num_bytes不等时，throw
+  // InternalError("DiskManager::read_page Error");
+
+  off_t off = page_no * PAGE_SIZE;
+  if (lseek(fd, off, SEEK_SET) == -1) throw UnixError();
+
+  ssize_t rd_sz = read(fd, offset, num_bytes);
+  if (rd_sz != num_bytes) {
+    throw InternalError("DiskManager::read_page Error");
+  }
 }
 
 /**
@@ -125,23 +157,17 @@ bool DiskManager::is_file(const std::string &path) {
  * @param {string} &path
  */
 void DiskManager::create_file(const std::string &path) {
-    // Todo:
-    // 调用open()函数，使用O_CREAT模式
-    // 注意不能重复创建相同文件
-    
-    // 检查文件是否已存在
-    if (is_file(path)) {
-        throw FileExistsError(path);
-    }
-    
-    // 创建文件
-    int fd = open(path.c_str(), O_CREAT | O_WRONLY, 0644);
-    if (fd == -1) {
-        throw UnixError();
-    }
-    
-    // 关闭文件描述符
-    close(fd);
+  // Todo:
+  // 调用open()函数，使用O_CREAT模式
+  // 注意不能重复创建相同文件
+
+  // 检查文件是否已存在
+  if (is_file(path)) throw FileExistsError(path);
+
+  // 创建文件
+  int fd = open(path.c_str(), O_CREAT | O_WRONLY, 0644);
+  if (fd == -1) throw UnixError();
+  close(fd);
 }
 
 /**
@@ -149,24 +175,19 @@ void DiskManager::create_file(const std::string &path) {
  * @param {string} &path 文件所在路径
  */
 void DiskManager::destroy_file(const std::string &path) {
-    // Todo:
-    // 调用unlink()函数
-    // 注意不能删除未关闭的文件
-    
-    // 检查文件是否已打开
-    if (path2fd_.count(path)) {
-        throw FileNotClosedError(path);
-    }
-    
-    // 删除文件
-    if (unlink(path.c_str()) == -1) {
-        if (errno == ENOENT) {
-            throw FileNotFoundError(path);
-        }
-        throw UnixError();
-    }
-}
+  // Todo:
+  // 调用unlink()函数
+  // 注意不能删除未关闭的文件
 
+  if (path2fd_.count(path)) throw FileNotClosedError(path);
+
+  if (unlink(path.c_str()) == -1) {
+    if (errno == ENOENT) {
+      throw FileNotFoundError(path);
+    }
+    throw UnixError();
+  }
+}
 
 /**
  * @description: 打开指定路径文件 
@@ -174,29 +195,25 @@ void DiskManager::destroy_file(const std::string &path) {
  * @param {string} &path 文件所在路径
  */
 int DiskManager::open_file(const std::string &path) {
-    // Todo:
-    // 调用open()函数，使用O_RDWR模式
-    // 注意不能重复打开相同文件，并且需要更新文件打开列表
-    
-    // 检查文件是否已打开
-    if (path2fd_.count(path)) {
-        throw FileNotClosedError(path);
+  // Todo:
+  // 调用open()函数，使用O_RDWR模式
+  // 注意不能重复打开相同文件，并且需要更新文件打开列表
+
+  // 是否已打开
+  if (path2fd_.count(path)) throw FileNotClosedError(path);
+
+  int fd = open(path.c_str(), O_RDWR);
+  if (fd == -1) {
+    if (errno == ENOENT) {
+      throw FileNotFoundError(path);
     }
-    
-    // 打开文件
-    int fd = open(path.c_str(), O_RDWR);
-    if (fd == -1) {
-        if (errno == ENOENT) {
-            throw FileNotFoundError(path);
-        }
-        throw UnixError();
-    }
-    
-    // 更新文件打开列表
-    path2fd_[path] = fd;
-    fd2path_[fd] = path;
-    
-    return fd;
+    throw UnixError();
+  }
+
+  // upd文件打开列表
+  std::tie(path2fd_[path], fd2path_[fd]) = std::pair(fd, path);
+
+  iroha fd;
 }
 
 /**
@@ -204,28 +221,18 @@ int DiskManager::open_file(const std::string &path) {
  * @param {int} fd 打开的文件的文件句柄
  */
 void DiskManager::close_file(int fd) {
-    // Todo:
-    // 调用close()函数
-    // 注意不能关闭未打开的文件，并且需要更新文件打开列表
-    
-    // 检查文件是否已打开
-    if (!fd2path_.count(fd)) {
-        throw FileNotOpenError(fd);
-    }
-    
-    // 获取文件路径
-    std::string path = fd2path_[fd];
-    
-    // 关闭文件
-    if (close(fd) == -1) {
-        throw UnixError();
-    }
-    
-    // 更新文件打开列表
-    path2fd_.erase(path);
-    fd2path_.erase(fd);
-}
+  // Todo:
+  // 调用close()函数
+  // 注意不能关闭未打开的文件，并且需要更新文件打开列表
 
+  // 是否已打开
+  if (not fd2path_.count(fd)) throw FileNotOpenError(fd);
+
+  if (close(fd) == -1) throw UnixError();
+
+  path2fd_.extract(fd2path_[fd]);
+  fd2path_.extract(fd);
+}
 
 /**
  * @description: 获得文件的大小
