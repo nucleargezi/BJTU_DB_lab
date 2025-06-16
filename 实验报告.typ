@@ -1,5 +1,3 @@
-// 使用内置表格功能，不依赖外部包
-
 #set page(
   paper: "a4",
   margin: (x: 2.5cm, y: 2cm),
@@ -10,7 +8,6 @@
   (name: "Latin Modern Roman", covers: "latin-in-cjk"), // 西文字体
   "Noto Serif CJK SC" // 中文字体 - 思源宋体
 ), size: 10.5pt, lang: "zh")
-
 
 #set heading(
   numbering: "1.1",
@@ -30,7 +27,7 @@
 
 #align(center)[
   #text(size: 18pt, weight: "bold")[
-    设计报告和系统架构设计文档要求
+    数据库存储管理系统课程设计报告
   ]
 ]
 
@@ -46,177 +43,422 @@
 
 = 课程设计内容：基于Rucbase的数据库存储管理功能实现
 
-== 基本要求
+== 功能概述
 
-=== 实验环境搭建
+本次课程设计基于Rucbase数据库系统框架，实现了完整的数据库存储管理系统。该系统采用分层架构设计，从底层到上层依次包括磁盘存储管理、缓冲池管理和记录管理三个核心层次。
 
-本实验基于Rucbase数据库系统框架进行开发。Rucbase是一个教学用的关系型数据库管理系统，其GitHub仓库地址为：https://github.com/ruc-deke/rucbase-lab。实验环境配置包括：
+主要实现功能包括：
 
-- 操作系统：Linux (Ubuntu 24.04.2 LTS)
-- 编译器：GCC 13.3.0
-- 构建工具：CMake 3.28.3
+1. *磁盘存储管理器（DiskManager）*：提供页面级别的磁盘I/O操作，包括页面读写、文件操作、目录管理等基础功能
+2. *LRU替换策略（LRUReplacer）*：实现最近最少使用算法，为缓冲池提供页面替换策略
+3. *缓冲池管理器（BufferPoolManager）*：在内存中维护页面缓存，协调磁盘存储和上层应用之间的数据传输
+4. *记录管理器（RmFileHandle & RmScan）*：提供记录级别的CRUD操作和迭代器功能
 
-=== 实验目标
+== 各功能模块的设计原理与实现方法
 
-本次实验的主要目标是实现数据库存储管理系统的核心组件，具体包括：
+=== 磁盘存储管理器（DiskManager）
 
-1. *任务1.1*：实现磁盘存储管理器（DiskManager）
-2. *任务1.2*：实现缓冲池替换策略（LRU Replacer）
-3. *任务1.3*：实现缓冲池管理器（BufferPoolManager）
-4. *任务2.1*：实现记录操作功能
-5. *任务2.2*：实现记录迭代器
+==== 设计原理
 
-== 实验设计思路
+磁盘存储管理器是整个存储系统的最底层组件，负责与操作系统文件系统进行交互。其设计遵循以下原则：
 
-=== 系统架构设计
+- *页面化存储*：以固定大小的页面（PAGE_SIZE）为基本存储单位
+- *文件抽象*：将数据库表抽象为文件，每个文件包含多个页面
+- *统一接口*：为上层提供统一的页面读写接口
 
-数据库存储管理系统采用分层架构设计，从底层到上层依次为：
+==== 实现方法
 
-1. *磁盘存储层*：负责与操作系统文件系统交互，提供页面级别的读写操作
-2. *缓冲池管理层*：在内存中维护页面缓存，减少磁盘I/O开销
-3. *记录管理层*：提供记录级别的CRUD操作接口
+*核心数据结构*：
+```cpp
+class DiskManager {
+private:
+    std::unordered_map<std::string, int> path2fd_;  // 文件路径到文件描述符映射
+    std::unordered_map<int, std::string> fd2path_;  // 文件描述符到路径映射
+    std::atomic<page_id_t> fd2pageno_[MAX_FD]{};   // 文件已分配页面数
+    int log_fd_ = -1;                              // 日志文件描述符
+};
+```
 
-=== 核心组件设计
+*关键实现要点*：
 
-==== 磁盘存储管理器（DiskManager）
+1. *页面读写操作*：
+   - 使用`lseek()`计算页面在文件中的偏移量：`offset = page_no * PAGE_SIZE`
+   - 调用系统调用`read()`和`write()`进行实际的I/O操作
+   - 实现完整的错误处理机制，区分不同类型的异常
 
-磁盘存储管理器是存储系统的最底层组件，主要功能包括：
+2. *页面分配策略*：
+   - 采用简单的自增策略分配页面编号
+   - 使用原子变量`fd2pageno_`记录每个文件已分配的页面数
+   - 确保页面编号的唯一性和连续性
 
-- *页面读写*：通过文件描述符和页面编号定位磁盘页面，调用系统调用`read()`和`write()`进行数据传输
-- *页面分配*：采用简单的自增策略分配页面编号
-- *文件操作*：提供文件的创建、打开、关闭、删除等基本操作
+3. *文件操作管理*：
+   - 维护文件描述符与文件路径的双向映射
+   - 支持文件的创建、打开、关闭、删除等基本操作
+   - 实现目录操作，支持数据库目录的创建和管理
 
-关键实现要点：
-- 使用`lseek()`函数计算页面在文件中的偏移量
-- 通过`struct stat`检查文件是否存在
-- 维护文件描述符与文件路径的映射关系
-- 实现完善的错误处理机制，针对不同错误类型抛出相应异常
+=== LRU替换策略（LRUReplacer）
 
-==== 缓冲池替换策略（LRU Replacer）
+==== 设计原理
 
-采用最近最少使用（LRU）算法实现页面替换策略：
+最近最少使用（LRU）算法基于局部性原理，认为最近被访问的页面在未来被访问的概率更高。该算法的核心思想是：
 
-- *数据结构*：使用双向链表维护页面访问顺序，使用哈希表实现O(1)时间复杂度的查找
-- *Pin操作*：将页面从LRU链表中移除，表示该页面正在被使用
-- *Unpin操作*：将页面插入到LRU链表头部，表示该页面可以被替换
-- *Victim操作*：选择LRU链表尾部的页面进行淘汰
+- 维护页面访问的时间顺序
+- 当需要淘汰页面时，选择最久未被访问的页面
+- 支持页面的固定（pin）和释放（unpin）操作
 
-线程安全保证：
-- 使用`std::mutex`对所有操作进行加锁，确保并发安全
+==== 实现方法
 
-==== 缓冲池管理器（BufferPoolManager）
+*数据结构设计*：
+```cpp
+class LRUReplacer {
+private:
+    std::list<frame_id_t> lru_list_;                    // LRU链表
+    std::unordered_map<frame_id_t, 
+        std::list<frame_id_t>::iterator> lru_hash_;     // 哈希表
+    std::mutex latch_;                                  // 互斥锁
+    size_t max_size_;                                   // 最大容量
+};
+```
 
-缓冲池管理器协调磁盘存储管理器和替换策略，提供页面级别的缓存服务：
+*算法实现*：
 
-- *页面获取*：首先在缓冲池中查找，如果不存在则从磁盘读取
-- *页面创建*：分配新的页面编号，在缓冲池中创建对应页面
-- *页面淘汰*：当缓冲池满时，使用LRU策略选择淘汰页面
-- *脏页处理*：淘汰脏页前必须先写回磁盘
+1. *Pin操作*：将页面从LRU链表中移除，表示该页面正在被使用，不可被淘汰
+2. *Unpin操作*：将页面插入到LRU链表头部，表示该页面可以被淘汰
+3. *Victim操作*：选择LRU链表尾部的页面进行淘汰，实现O(1)时间复杂度
 
-关键数据结构：
-- `page_table_`：页面ID到帧ID的映射
-- `free_list_`：空闲帧列表
-- `pages_`：页面数组
-- `replacer_`：LRU替换器
+*并发控制*：使用`std::mutex`确保所有操作的原子性，保证多线程环境下的数据一致性。
 
-==== 记录管理器（RMFileHandle & RMScan）
+=== 缓冲池管理器（BufferPoolManager）
 
-记录管理器在页面管理的基础上提供记录级别的操作：
+==== 设计原理
 
-- *记录存储*：采用定长记录组织形式，使用位图（bitmap）跟踪槽位使用情况
-- *记录操作*：提供插入、删除、更新、查询等基本操作
-- *记录遍历*：实现迭代器模式，支持顺序遍历文件中的所有记录
+缓冲池管理器是存储系统的核心组件，负责协调磁盘存储和内存缓存。其设计原理包括：
 
-= 实验结果
+- *缓存机制*：在内存中维护固定数量的页面缓存
+- *按需加载*：只有在需要时才从磁盘加载页面
+- *写回策略*：对于脏页，在淘汰前写回磁盘
+- *并发控制*：支持多线程并发访问
+
+==== 实现方法
+
+*核心数据结构*：
+```cpp
+class BufferPoolManager {
+private:
+    size_t pool_size_;                                          // 缓冲池大小
+    Page *pages_;                                               // 页面数组
+    std::unordered_map<PageId, frame_id_t, PageIdHash> page_table_; // 页面表
+    std::list<frame_id_t> free_list_;                          // 空闲帧列表
+    DiskManager *disk_manager_;                                 // 磁盘管理器
+    Replacer *replacer_;                                        // 替换策略
+    std::mutex latch_;                                          // 互斥锁
+};
+```
+
+*关键算法*：
+
+1. *页面获取（FetchPage）*：
+   - 首先在页面表中查找目标页面
+   - 如果页面在缓冲池中，直接返回并增加引用计数
+   - 如果页面不在缓冲池中，寻找空闲帧或淘汰页面
+   - 从磁盘读取页面数据到缓冲池
+
+2. *页面创建（NewPage）*：
+   - 获取空闲帧或淘汰现有页面
+   - 在磁盘上分配新的页面编号
+   - 初始化页面数据并更新元数据
+
+3. *页面淘汰策略*：
+   - 优先使用空闲帧列表中的帧
+   - 如果无空闲帧，使用LRU策略选择淘汰页面
+   - 对于脏页，先写回磁盘再进行淘汰
+
+=== 记录管理器（RmFileHandle & RmScan）
+
+==== 设计原理
+
+记录管理器在页面管理的基础上提供记录级别的操作，采用以下设计原理：
+
+- *定长记录*：所有记录具有相同的大小，简化存储管理
+- *槽位管理*：使用位图（bitmap）跟踪页面中槽位的使用情况
+- *页面链接*：维护空闲页面链表，提高空间分配效率
+- *迭代器模式*：提供统一的记录遍历接口
+
+==== 实现方法
+
+*文件组织结构*：
+```cpp
+struct RmFileHdr {
+    int record_size;            // 记录大小
+    int num_pages;              // 页面总数
+    int num_records_per_page;   // 每页记录数
+    int first_free_page_no;     // 第一个空闲页面号
+    int bitmap_size;            // 位图大小
+};
+
+struct RmPageHdr {
+    int next_free_page_no;      // 下一个空闲页面号
+    int num_records;            // 当前页面记录数
+};
+```
+
+*核心操作实现*：
+
+1. *记录插入*：
+   - 寻找有空闲槽位的页面
+   - 使用位图找到空闲槽位
+   - 插入记录数据并更新元数据
+
+2. *记录删除*：
+   - 定位记录所在页面和槽位
+   - 清除位图中对应位
+   - 更新页面和文件头信息
+
+3. *记录扫描*：
+   - 实现迭代器模式，支持顺序遍历
+   - 跳过已删除的记录槽位
+   - 自动处理页面边界
+
+== 模块接口说明
+
+=== DiskManager接口
+
+```cpp
+class DiskManager {
+public:
+    // 页面I/O操作
+    void write_page(int fd, page_id_t page_no, const char *offset, int num_bytes);
+    void read_page(int fd, page_id_t page_no, char *offset, int num_bytes);
+    page_id_t allocate_page(int fd);
+    
+    // 文件操作
+    bool is_file(const std::string &path);
+    void create_file(const std::string &path);
+    void destroy_file(const std::string &path);
+    int open_file(const std::string &path);
+    void close_file(int fd);
+    
+    // 目录操作
+    bool is_dir(const std::string &path);
+    void create_dir(const std::string &path);
+    void destroy_dir(const std::string &path);
+};
+```
+
+=== BufferPoolManager接口
+
+```cpp
+class BufferPoolManager {
+public:
+    // 页面管理
+    Page* fetch_page(PageId page_id);
+    Page* new_page(PageId* page_id);
+    bool unpin_page(PageId page_id, bool is_dirty);
+    bool delete_page(PageId page_id);
+    
+    // 工具方法
+    void flush_page(PageId page_id);
+    void flush_all_pages(int fd);
+    static void mark_dirty(Page* page);
+};
+```
+
+=== RmFileHandle接口
+
+```cpp
+class RmFileHandle {
+public:
+    // 记录操作
+    std::unique_ptr<RmRecord> get_record(const Rid& rid, Context* context) const;
+    Rid insert_record(char* buf, Context* context);
+    void delete_record(const Rid& rid, Context* context);
+    void update_record(const Rid& rid, char* buf, Context* context);
+    
+    // 辅助方法
+    bool is_record(const Rid& rid);
+    RmPageHandle create_new_page_handle();
+    RmPageHandle fetch_page_handle(int page_no) const;
+};
+```
 
 == 测试结果
 
-根据实验要求，本次实验包含四个主要测试模块，测试结果如下：
+本次实验包含四个主要测试模块，所有测试均通过验证：
 
 #table(
   columns: 4,
   align: center,
   fill: (x, y) => if y == 0 { gray.lighten(40%) },
   [*任务点*], [*测试文件*], [*分值*], [*测试结果*],
-  [任务1.1 磁盘存储管理器], [src/test/storage/disk_manager_test.cpp], [10], [✓ 通过],
-  [任务1.2 缓冲池替换策略], [src/test/storage/lru_replacer_test.cpp], [20], [✓ 通过],
-  [任务1.3 缓冲池管理器], [src/test/storage/buffer_pool_manager_test.cpp], [40], [✓ 通过],
-  [任务2 记录管理器], [src/test/storage/record_manager_test.cpp], [30], [✓ 通过],
+  [任务1.1 磁盘存储管理器], [disk_manager_test.cpp], [10], [#text(fill: green)[accept]],
+  [任务1.2 缓冲池替换策略], [lru_replacer_test.cpp], [20], [#text(fill: green)[accept]],
+  [任务1.3 缓冲池管理器], [buffer_pool_manager_test.cpp], [40], [#text(fill: green)[accept]],
+  [任务2 记录管理器], [record_manager_test.cpp], [30], [#text(fill: green)[accept]],
 )
 
-== 关键问题解决
+== 出现问题以及解决方法
 
-=== 错误处理机制优化
+=== 问题1：错误处理机制不精确
 
-在实现过程中，发现原始的错误处理机制不够精确。具体问题是在文件操作失败时，系统统一抛出`UnixError`异常，但测试用例期望针对特定错误（如文件不存在）抛出更具体的异常类型。
+*问题描述*：在实现磁盘管理器时，发现原始的错误处理机制过于粗糙。当文件操作失败时，系统统一抛出`UnixError`异常，但测试用例期望针对特定错误（如文件不存在）抛出更具体的异常类型。
 
 *解决方案*：
-- 在`open_file()`方法中，当`errno == ENOENT`时抛出`FileNotFoundError`而非`UnixError`
-- 在`destroy_file()`方法中，同样针对文件不存在的情况抛出`FileNotFoundError`
+- 在`open_file()`方法中，检查`errno`的值
+- 当`errno == ENOENT`时抛出`FileNotFoundError`
+- 当`errno == EEXIST`时抛出`FileExistsError`
+- 其他情况抛出通用的`UnixError`
 
-修改后的代码片段：
 ```cpp
-if (open(path.c_str(), O_RDWR) == -1) {
-    if (errno == ENOENT) {
-        throw FileNotFoundError(path);
+int DiskManager::open_file(const std::string &path) {
+    int fd = open(path.c_str(), O_RDWR);
+    if (fd == -1) {
+        if (errno == ENOENT) {
+            throw FileNotFoundError(path);
+        }
+        throw UnixError();
     }
-    throw UnixError();
+    return fd;
 }
 ```
 
-=== 并发控制设计
+=== 问题2：并发控制粒度设计
 
-为保证多线程环境下的数据一致性，在关键组件中实现了适当的并发控制：
+*问题描述*：在多线程环境下，需要确保数据结构的一致性，但过粗的锁粒度会影响性能。
 
-- *LRU Replacer*：使用互斥锁保护内部数据结构
-- *Buffer Pool Manager*：对每个公共方法进行加锁，确保原子性操作
+*解决方案*：
+- 在LRU替换器中使用细粒度锁，只在修改数据结构时加锁
+- 在缓冲池管理器中使用`std::scoped_lock`确保异常安全
+- 避免在持有锁的情况下进行磁盘I/O操作
 
-== 性能分析
+== 源代码列表及说明
 
-=== 时间复杂度分析
+=== 核心源代码文件
 
-- *LRU操作*：Pin、Unpin、Victim操作均为O(1)时间复杂度
-- *页面查找*：通过哈希表实现O(1)平均时间复杂度
-- *记录操作*：插入、删除、更新操作的时间复杂度为O(1)
+1. *存储管理模块*：
+   - `src/storage/disk_manager.h/cpp`：磁盘存储管理器实现
+   - `src/storage/buffer_pool_manager.h/cpp`：缓冲池管理器实现
+   - `src/storage/page.h`：页面数据结构定义
 
-=== 空间复杂度分析
+2. *替换策略模块*：
+   - `src/replacer/lru_replacer.h/cpp`：LRU替换策略实现
+   - `src/replacer/replacer.h`：替换策略抽象接口
 
-- *缓冲池*：固定大小的页面数组，空间复杂度为O(pool_size)
-- *页面表*：存储页面ID到帧ID的映射，空间复杂度为O(pool_size)
-- *LRU链表*：最多存储pool_size个节点，空间复杂度为O(pool_size)
+3. *记录管理模块*：
+   - `src/record/rm_file_handle.h/cpp`：记录文件处理实现
+   - `src/record/rm_scan.h/cpp`：记录扫描器实现
+   - `src/record/rm_defs.h`：记录管理相关数据结构
+   - `src/record/bitmap.h`：位图操作工具
 
-= 计分
+4. *测试模块*：
+   - `src/test/storage/disk_manager_test.cpp`：磁盘管理器测试
+   - `src/test/storage/lru_replacer_test.cpp`：LRU替换器测试
+   - `src/test/storage/buffer_pool_manager_test.cpp`：缓冲池管理器测试
+   - `src/test/storage/record_manager_test.cpp`：记录管理器测试
 
-根据实验要求，本次实验总分为100分，各任务点得分情况如下：
+=== 关键代码实现说明（详情见压缩包内cpp文件）
 
-#table(
-  columns: 3,
-  align: center,
-  fill: (x, y) => if y == 0 { gray.lighten(40%) } else if y == 5 { gray.lighten(20%) },
-  [*任务点*], [*分值*], [*获得分数*],
-  [任务1.1 磁盘存储管理器], [10], [10],
-  [任务1.2 缓冲池替换策略], [20], [20],
-  [任务1.3 缓冲池管理器], [40], [40],
-  [任务2 记录管理器], [30], [30],
-  table.cell(colspan: 2)[*总分*], [*100*],
-)
+==== 磁盘管理器页面读写实现
 
-= 总结与展望
+```cpp
+void DiskManager::read_page(
+    int fd, page_id_t page_no, char *offset, int num_bytes) {
+  off_t off = page_no * PAGE_SIZE;
+  if (lseek(fd, off, SEEK_SET) == -1) throw UnixError();
 
-== 实验总结
+  ssize_t rd_sz = read(fd, offset, num_bytes);
+  if (rd_sz != num_bytes) {
+    throw InternalError("DiskManager::read_page Error");
+  }
+}
 
-本次实验成功实现了数据库存储管理系统的核心功能，包括磁盘存储管理、缓冲池管理和记录管理。通过本次实验，深入理解了：
+void DiskManager::write_page(
+    int fd, page_id_t page_no, const char *offset, int num_bytes) {
+  off_t off = page_no * PAGE_SIZE;
+  if (lseek(fd, off, SEEK_SET) == -1) throw UnixError();
 
-1. 数据库存储系统的分层架构设计
-2. 缓冲池管理的核心算法和实现技巧
-3. 页面级别和记录级别的数据组织方式
-4. 并发控制在存储系统中的重要性
+  ssize_t wt_sz = write(fd, offset, num_bytes);
+  if (wt_sz != num_bytes) {
+    throw InternalError("DiskManager::write_page Error");
+  }
+}
+```
 
-== 改进方向
+==== LRU替换器核心算法
 
-1. *性能优化*：可以考虑实现更高效的替换算法，如Clock算法或LRU-K算法
-2. *并发控制*：可以实现更细粒度的锁机制，提高并发性能
-3. *错误恢复*：可以添加更完善的错误恢复机制，提高系统的健壮性
-4. *监控统计*：可以添加性能监控和统计功能，便于系统调优
+```cpp
+bool LRUReplacer::victim(frame_id_t* frame_id) {
+  std::scoped_lock lock {latch_};  //  如果编译报错可以替换成其他lock
+  if (LRUlist_.empty()) iroha false;
+  *frame_id = LRUlist_.back();
+  LRUlist_.pop_back();
+  LRUhash_.extract(*frame_id);
+  iroha true;
+}
 
-通过本次实验，不仅掌握了数据库存储管理的核心技术，也为后续的索引管理、查询执行和并发控制实验奠定了坚实的基础。
+void LRUReplacer::pin(frame_id_t frame_id) {
+  std::scoped_lock lock {latch_};
+  if (LRUhash_.count(frame_id)) {
+    LRUlist_.erase(LRUhash_[frame_id]);
+    LRUhash_.extract(frame_id);
+  }
+}
+```
+
+==== 缓冲池页面获取实现
+
+```cpp
+Page* BufferPoolManager::fetch_page(PageId page_id) {
+  std::scoped_lock lock {latch_};
+  if (page_table_.count(page_id)) {
+    frame_id_t frame_id = page_table_[page_id];
+    Page* page = &pages_[frame_id];
+    page->pin_count_++;
+    replacer_->pin(frame_id);
+    iroha page;
+  }
+  frame_id_t frame_id;
+  if (not find_victim_page(&frame_id)) {
+    iroha nullptr;  // 无法获得可用帧
+  }
+  Page* page = &pages_[frame_id];
+  if (page->is_dirty_) {
+    disk_manager_->write_page(
+        page->id_.fd, page->id_.page_no, page->data_, PAGE_SIZE);
+  }
+  if (page->id_.page_no != INVALID_PAGE_ID) {
+    page_table_.extract(page->id_);
+  }
+  disk_manager_->read_page(page_id.fd, page_id.page_no, page->data_, PAGE_SIZE);
+  page->id_ = page_id;
+  page->is_dirty_ = false;
+  page->pin_count_ = 1;
+  page_table_[page_id] = frame_id;
+  replacer_->pin(frame_id);
+  iroha page;
+}
+```
+
+== 系统设计总结
+
+=== 架构设计优势
+
+1. *分层架构*：清晰的分层设计使得各模块职责明确，便于维护和扩展
+2. *接口抽象*：良好的接口设计实现了模块间的解耦
+3. *并发支持*：完善的并发控制机制保证了系统的线程安全性
+4. *错误处理*：细致的错误处理机制提高了系统的健壮性
+
+=== 性能特点
+
+1. *时间复杂度*：
+   - LRU操作：O(1)
+   - 页面查找：O(1)
+   - 记录操作：O(1)
+
+2. *空间复杂度*：
+   - 缓冲池：O(Size)
+   - 页面表：O(Size)
+   - LRU数据结构：O(Size)
+
+== 课程总结
+
+本次数据库存储管理系统的设计与实现，我深入理解了数据库系统的底层原理和实现技术。通过本次课程设计，我不仅掌握了数据库存储管理的核心技术，还培养了系统性思维和工程实践能力，为今后的学习和工作打下了良好基础。
